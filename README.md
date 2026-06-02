@@ -22,7 +22,7 @@ Based on public sources (the official [MCP Registry](https://registry.modelconte
 - Add and remove users to/from groups
 - Create new groups (`APPLICATION_GROUP`, `AD_SECURITY`, `AD_DISTRIBUTION`)
 - Rename groups and change group attributes (type, scope, description, email, status…)
-- Set custom user attributes on groups (e.g. `notinoCustomAttribute2` for resource / competence flagging)
+- Set custom user attributes on groups (e.g. `customAttribute2` for resource / competence flagging)
 - Manage hierarchical group relationships (parent records)
 - Automatic session re-authentication when the IDM session expires
 
@@ -47,7 +47,7 @@ Add a user to a group.
 Remove a user from a group.
 
 ### `idm_create_group`
-Create a new group. Supports `APPLICATION_GROUP` (no AD), `AD_SECURITY` and `AD_DISTRIBUTION` types. Optionally sets `notinoCustomAttribute2` (`resource` / `competence`) immediately after creation.
+Create a new group. Supports `APPLICATION_GROUP` (no AD), `AD_SECURITY` and `AD_DISTRIBUTION` types. Optionally sets `customAttribute2` (`resource` / `competence`) immediately after creation.
 
 ### `idm_change_group`
 The main "update" tool — change multiple properties of an existing group in one call: name, type, scope, custom attribute, description, info, email, status.
@@ -56,7 +56,7 @@ The main "update" tool — change multiple properties of an existing group in on
 Simple rename of a group. Preserves attributes that are not explicitly overridden.
 
 ### `idm_set_group_attribute`
-Set a user attribute on a group via `saveUserAttributeToEntity` (e.g. `AD_NOTINO_CUSTOM_ATTRIBUTE_2` = `resource` / `competence`).
+Set a user attribute on a group via `saveUserAttributeToEntity` (e.g. `AD_CUSTOM_ATTRIBUTE_2` = `resource` / `competence`).
 
 ### `idm_add_group_parent`
 Add a parent record to a child group. Typical use case: a competence group (child) inherits permissions from a resource group (parent).
@@ -68,14 +68,54 @@ Remove a parent relationship between two groups.
 
 Once configured, you can use natural-language commands with Claude:
 
-- "Find groups containing 'Admin' in the NOTINO domain"
+- "Find groups containing 'Admin' in the ACME domain"
 - "Show me the detail of the group G_DP_DEVELOPMENT_Specialist including members"
-- "Create a new AD Security group G_NEW_TEAM with GLOBAL scope and notinoCustomAttribute2 = resource"
+- "Create a new AD Security group G_NEW_TEAM with GLOBAL scope and customAttribute2 = resource"
 - "Add user jan.novak to group G_DP_DEVELOPMENT_Specialist"
-- "Rename group G_OLD_NAME to G_NEW_NAME and set notinoCustomAttribute2 to competence"
+- "Rename group G_OLD_NAME to G_NEW_NAME and set customAttribute2 to competence"
 - "Add parent record d_special_heads to group G_DP_DEVELOPMENT_Specialist"
 - "Remove user jan.novak from group G_DP_DEVELOPMENT_Specialist"
-- "Show detail of user marek.kudlacek in NOTINO"
+- "Show detail of user marek.kudlacek in the ACME domain"
+
+### End-to-end example: creating a group with attributes and a parent record
+
+Real prompt the agent received:
+
+> **Please create in IDM group:**
+>
+> - **NAME:** `G_MARA_TEST`
+> - **GROUP TYPE:** `AD Security`
+> - **GROUP SCOPE:** `Global`
+> - **EMAIL:** `g.mara.test@marekudlacek.cz`
+> - **CUSTOMATTRIBUTE2:** `organization team`
+> - **PARENT RECORDS:** `G_MARA`
+
+Under the hood Claude orchestrates **two MCP tool calls** in sequence:
+
+1. **`idm_create_group`** — creates the group, sets type/scope/email and `customAttribute2` in one shot (the tool internally chains `createUserGroup` + `saveUserAttributeToEntity`):
+
+   ```json
+   {
+     "name": "G_MARA_TEST",
+     "group_type": "AD_SECURITY",
+     "group_scope": "GLOBAL",
+     "email": "g.mara.test@marekudlacek.cz",
+     "custom_attribute_2": "organization team"
+   }
+   ```
+
+2. **`idm_add_group_parent`** — attaches `G_MARA` as a parent record (this step is not part of `createUserGroup` in the IDM SOAP API and must be done separately):
+
+   ```json
+   {
+     "child_group_name": "G_MARA_TEST",
+     "parent_group_name": "G_MARA"
+   }
+   ```
+
+Result in AC Identita UI — group `G_MARA_TEST` is created as `AD Security / Global`, with the correct e-mail and `customAttribute2` set, and `G_MARA` linked as a parent on the **Parent records** tab:
+
+![G_MARA_TEST created via the MCP server, shown in AC Identita](docs/screenshots/g_mara_test.png)
 
 ## Requirements
 
@@ -133,11 +173,12 @@ Set the following environment variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `IDM_ENDPOINT` | Yes | Full URL of the IDM SOAP endpoint (e.g. `https://idm.your-company.com/IDM/ExternalInterface?wsdl`) |
 | `IDM_GUID_SYSTEM` | Yes | GUID of the calling system in IDM (assigned by IDM admin) |
 | `IDM_LOGIN` | Yes | Service account login for IDM |
 | `IDM_PASSWORD` | Yes | Service account password |
-
-The IDM endpoint URL is currently hard-coded to `https://idm.notino.com/IDM/ExternalInterface?wsdl` in `idm_mcp.py`. If you deploy against a different IDM instance, change the `IDM_ENDPOINT` constant.
+| `IDM_DEFAULT_DOMAIN` | No | Default IDM domain code used when a tool is invoked without `domain_code` (e.g. `ACME`). Leave empty to require explicit specification. |
+| `IDM_CUSTOM_ATTRIBUTE_2_CODE` | No | Attribute code used by the `custom_attribute_2` parameter in `idm_create_group` / `idm_change_group`. Tenant-specific. Default: `AD_CUSTOM_ATTRIBUTE_2`. |
 
 ## Setup for Claude Code
 
@@ -150,9 +191,12 @@ Add to your `~/.claude.json` or your project's `.claude.json`:
       "command": "python",
       "args": ["/path/to/idm_mcp.py"],
       "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password"
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
     }
   }
@@ -174,42 +218,49 @@ Or with `uv` (recommended):
         "/path/to/idm_mcp.py"
       ],
       "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password"
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
     }
   }
 }
 ```
 
-# Setup for Claude Desktop
+### Alternative: install via the `claude` CLI
 
-## Quick Install via CLI
+If you have the Claude Code CLI installed, you can register the server with a single command instead of editing JSON by hand.
 
-You can add this MCP server directly using the `claude mcp add` command.
-
-### With uv (recommended):
+#### With uv (recommended):
 
 ```bash
 claude mcp add --transport stdio idm \
+  --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   --env IDM_GUID_SYSTEM=your-guid-system \
   --env IDM_LOGIN=your-service-login \
   --env IDM_PASSWORD=your-service-password \
+  --env IDM_DEFAULT_DOMAIN=ACME \
+  --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   -- uv run --with requests --with mcp python /path/to/idm_mcp.py
 ```
 
-### With python:
+#### With python:
 
 ```bash
 claude mcp add --transport stdio idm \
+  --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   --env IDM_GUID_SYSTEM=your-guid-system \
   --env IDM_LOGIN=your-service-login \
   --env IDM_PASSWORD=your-service-password \
+  --env IDM_DEFAULT_DOMAIN=ACME \
+  --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   -- python /path/to/idm_mcp.py
 ```
 
-### Manage MCP servers:
+#### Manage MCP servers:
 
 ```bash
 # List all configured servers
@@ -222,12 +273,25 @@ claude mcp get idm
 claude mcp remove idm
 ```
 
-## Install via CONFIG FILES
+> **Note:** `claude mcp add` is a feature of the **Claude Code CLI** — it does not modify the Claude Desktop config. For Claude Desktop see the next section.
 
-Add to your Claude Desktop configuration file:
+## Setup for Claude Desktop
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+Claude Desktop is configured exclusively through its config file — there is no CLI installer.
+
+### 1. Open the config file
+
+In Claude Desktop click **Developer** in the left sidebar → **Edit Config**. This opens (or creates) the config file at the following paths:
+
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+### 2. Add the IDM server entry
+
+Paste the `idm` block inside `mcpServers`. If the file is empty, use the full snippet below as-is.
+
+With `python`:
 
 ```json
 {
@@ -236,9 +300,12 @@ Add to your Claude Desktop configuration file:
       "command": "python",
       "args": ["/path/to/idm_mcp.py"],
       "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password"
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
     }
   }
@@ -260,14 +327,21 @@ Or with `uv` (recommended):
         "/path/to/idm_mcp.py"
       ],
       "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password"
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
     }
   }
 }
 ```
+
+### 3. Restart Claude Desktop
+
+Quit Claude Desktop completely and reopen it. The `idm_*` tools should now be available — verify them in the **Developer** tab.
 
 ## Performance Tips
 
