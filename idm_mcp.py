@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-IDM MCP Server - Model Context Protocol server pro ARICOMA Identity Management
-Umožňuje vyhledávání skupin a uživatelů v IDM přímo z Claude Desktop / Code
+IDM MCP Server - Model Context Protocol server for ARICOMA Identity Management
+Enables searching groups and users in IDM directly from Claude Desktop / Code
 """
 
 import os
@@ -12,29 +12,29 @@ import xml.etree.ElementTree as ET
 from typing import Optional, Dict, List, Any
 from mcp.server.fastmcp import FastMCP
 
-# Suppress SSL warnings pro IDM API
+# Suppress SSL warnings for the IDM API
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
-# Inicializuj FastMCP server
+# Initialize the FastMCP server
 mcp = FastMCP("IDM Server")
 
-# IDM API konfigurace
+# IDM API configuration
 IDM_ENDPOINT = os.getenv("IDM_ENDPOINT", "")
 IDM_GUID_SYSTEM = os.getenv("IDM_GUID_SYSTEM", "")
 IDM_LOGIN = os.getenv("IDM_LOGIN", "")
 IDM_PASSWORD = os.getenv("IDM_PASSWORD", "")
 
-# Default doménový kód pro vyhledávání (např. "ACME", "MYCORP"). Nech prázdné, pokud
-# nechceš implicitně filtrovat podle domény.
+# Default domain code for searches (e.g. "ACME", "MYCORP"). Leave empty if
+# you don't want to implicitly filter by domain.
 IDM_DEFAULT_DOMAIN = os.getenv("IDM_DEFAULT_DOMAIN", "")
 
-# Kód uživatelského atributu pro custom_attribute_2 — liší se podle tenanta v IDM.
-# Konfigurovatelné kvůli generickému použití napříč organizacemi.
+# User attribute code for custom_attribute_2 — differs per IDM tenant.
+# Configurable for generic use across organizations.
 IDM_CUSTOM_ATTRIBUTE_2_CODE = os.getenv("IDM_CUSTOM_ATTRIBUTE_2_CODE", "AD_CUSTOM_ATTRIBUTE_2")
 
 
 class IdmApiClient:
-    """Client pro IDM SOAP API"""
+    """Client for the IDM SOAP API"""
 
     def __init__(self):
         self.endpoint = IDM_ENDPOINT
@@ -44,25 +44,25 @@ class IdmApiClient:
         self.session_guid: Optional[str] = None
 
     def _make_request(self, body: str, retry_on_auth_error: bool = True) -> ET.Element:
-        """Provede SOAP request"""
+        """Performs a SOAP request"""
         response = requests.post(
             self.endpoint,
             data=body,
-            headers={"Content-Type": "application/xml"},  # Bez charset= podle PowerShell
-            timeout=60,  # Zvýšený timeout
-            verify=False,  # Disable SSL verification pro IDM API
+            headers={"Content-Type": "application/xml"},  # No charset= to match PowerShell
+            timeout=60,  # Increased timeout
+            verify=False,  # Disable SSL verification for the IDM API
         )
 
-        # Zkontroluj response
+        # Check the response
         if response.status_code != 200:
-            # Pokud je to 500 a obsahuje session error, zkus znovu přihlásit
+            # If it's a 500 and contains a session error, try to re-authenticate
             if response.status_code == 500 and retry_on_auth_error:
                 error_text = response.text.lower()
                 if 'session' in error_text or 'guid' in error_text or 'prihlaseni' in error_text:
                     sys.stderr.write("Session expired, re-authenticating...\n")
                     self.session_guid = None
                     self.login_to_idm()
-                    # Zkus request znovu (ale už jen jednou)
+                    # Retry the request once
                     return self._make_request(body, retry_on_auth_error=False)
 
             # Log full error response before raising
@@ -78,7 +78,7 @@ class IdmApiClient:
             sys.stderr.write(f"Response text: {response.text[:500]}\n")
             raise Exception(f"Failed to parse XML response: {e}")
 
-        # Zkontroluj, jestli response neobsahuje error
+        # Check whether the response contains an error
         for elem in root.iter():
             if elem.tag.endswith('errorMessage') or elem.tag.endswith('error'):
                 error_msg = elem.text or "Unknown error"
@@ -87,15 +87,15 @@ class IdmApiClient:
         return root
 
     def _extract_text(self, root: ET.Element, tag: str) -> Optional[str]:
-        """Extrahuje text z XML elementu"""
-        # Hledej element bez namespace
+        """Extracts text from an XML element"""
+        # Look for the element regardless of namespace
         for elem in root.iter():
             if elem.tag.endswith(tag):
                 return elem.text
         return None
 
     def _extract_all(self, root: ET.Element, tag: str) -> List[ET.Element]:
-        """Extrahuje všechny elementy daného tagu"""
+        """Extracts all elements with the given tag"""
         result = []
         for elem in root.iter():
             if elem.tag.endswith(tag):
@@ -103,7 +103,7 @@ class IdmApiClient:
         return result
 
     def login_to_idm(self) -> str:
-        """Přihlášení do IDM"""
+        """Logs in to IDM"""
         sys.stderr.write(f"DEBUG login_to_idm: guid_system='{self.guid_system}', login='{self.login}', password_len={len(self.password)}\n")
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
             <soapenv:Header/>
@@ -128,7 +128,7 @@ class IdmApiClient:
         return guid_session
 
     def ensure_session(self) -> str:
-        """Zajistí platnou session"""
+        """Ensures a valid session"""
         if not self.session_guid:
             self.login_to_idm()
         return self.session_guid
@@ -139,7 +139,7 @@ class IdmApiClient:
         domain_code: Optional[str] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Získá seznam skupin"""
+        """Gets the list of groups"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -164,7 +164,7 @@ class IdmApiClient:
 
         root = self._make_request(body)
 
-        # Extrahuj skupiny
+        # Extract groups
         groups = []
         for group_elem in self._extract_all(root, "UserGroup"):
             group = {
@@ -189,7 +189,7 @@ class IdmApiClient:
         include_user_in_group: bool = True,
         user_status: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Získá detail skupiny"""
+        """Gets group detail"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -220,7 +220,7 @@ class IdmApiClient:
 
         root = self._make_request(body)
 
-        # Extrahuj detail skupiny
+        # Extract group detail
         group = {
             "id": self._extract_text(root, "idRecord"),
             "code": self._extract_text(root, "code"),
@@ -233,21 +233,81 @@ class IdmApiClient:
             "groupScope": self._extract_text(root, "groupScope"),
         }
 
-        # Extrahuj členy
+        # Extract members
         members = []
-        for user_elem in self._extract_all(root, "User"):
-            member = {
-                "id": self._extract_text(user_elem, "id"),
-                "login": self._extract_text(user_elem, "login"),
-                "domain": self._extract_text(user_elem, "domain"),
-                "firstName": self._extract_text(user_elem, "firstName"),
-                "surname": self._extract_text(user_elem, "surname"),
-                "email": self._extract_text(user_elem, "email"),
-                "status": self._extract_text(user_elem, "status"),
-            }
-            members.append(member)
+        users_parent = None
+        for elem in root.iter():
+            if elem.tag.endswith('users'):
+                users_parent = elem
+                break
+
+        if users_parent is not None:
+            for user_elem in users_parent:
+                if user_elem.tag.endswith('user'):
+                    member = {
+                        "id": self._extract_text(user_elem, "idUser") or self._extract_text(user_elem, "id"),
+                        "login": self._extract_text(user_elem, "login"),
+                        "domain": self._extract_text(user_elem, "domain"),
+                        "firstName": self._extract_text(user_elem, "firstName"),
+                        "surname": self._extract_text(user_elem, "surname"),
+                        "email": self._extract_text(user_elem, "email"),
+                        "status": self._extract_text(user_elem, "status"),
+                    }
+                    members.append(member)
+        else:
+            for user_elem in self._extract_all(root, "user"):
+                member = {
+                    "id": self._extract_text(user_elem, "idUser") or self._extract_text(user_elem, "id"),
+                    "login": self._extract_text(user_elem, "login"),
+                    "domain": self._extract_text(user_elem, "domain"),
+                    "firstName": self._extract_text(user_elem, "firstName"),
+                    "surname": self._extract_text(user_elem, "surname"),
+                    "email": self._extract_text(user_elem, "email"),
+                    "status": self._extract_text(user_elem, "status"),
+                }
+                members.append(member)
 
         return {"group": group, "members": members, "memberCount": len(members)}
+
+    def get_child_groups(
+        self,
+        name_user_group: str,
+        domain_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Gets child groups of the given group — parses <childs><child> from the getDetailUserGroup response"""
+        session = self.ensure_session()
+
+        body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
+            <soapenv:Header/>
+            <soapenv:Body>
+                <urn:getDetailUserGroup>
+                    <ExDetailUserGroupRequest>
+                        <guidSystem>{self.guid_system}</guidSystem>
+                        <guidSession>{session}</guidSession>
+                        <nameUserGroup>{name_user_group}</nameUserGroup>"""
+
+        if domain_code:
+            body += f"<domainCode>{domain_code}</domainCode>"
+
+        body += """<includeUserInGroup>false</includeUserInGroup>
+                    </ExDetailUserGroupRequest>
+                </urn:getDetailUserGroup>
+            </soapenv:Body>
+        </soapenv:Envelope>"""
+
+        root = self._make_request(body)
+
+        # Child groups are in the <childs><child> elements
+        children = []
+        for childs_elem in self._extract_all(root, "childs"):
+            for child_elem in self._extract_all(childs_elem, "child"):
+                children.append({
+                    "id": self._extract_text(child_elem, "idRecord"),
+                    "code": self._extract_text(child_elem, "code"),
+                    "name": self._extract_text(child_elem, "name"),
+                })
+
+        return {"parent": name_user_group, "children": children, "childCount": len(children)}
 
     def get_list_user(
         self,
@@ -256,7 +316,7 @@ class IdmApiClient:
         status: Optional[str] = None,
         user_type: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Získá seznam uživatelů"""
+        """Gets the list of users"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -283,7 +343,7 @@ class IdmApiClient:
 
         root = self._make_request(body)
 
-        # Extrahuj uživatele
+        # Extract users
         users = []
         for user_elem in self._extract_all(root, "User"):
             user = {
@@ -306,7 +366,7 @@ class IdmApiClient:
         email: Optional[str] = None,
         domain: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Získá detail uživatele"""
+        """Gets user detail"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -351,7 +411,7 @@ class IdmApiClient:
         name_user_group: str,
         domain: Optional[str] = None,
     ) -> None:
-        """Přidá uživatele do skupiny"""
+        """Adds a user to a group"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -380,7 +440,7 @@ class IdmApiClient:
         name_user_group: str,
         domain: Optional[str] = None,
     ) -> None:
-        """Odebere uživatele ze skupiny"""
+        """Removes a user from a group"""
         session = self.ensure_session()
 
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
@@ -412,17 +472,19 @@ class IdmApiClient:
         info: Optional[str] = None,
         email: Optional[str] = None,
         denied_in_permission: Optional[str] = None,
+        domain_code: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Vytvoří novou skupinu v IDM
+        """Creates a new group in IDM
 
         Args:
-            name: Název nové skupiny
-            user_group_type: Typ skupiny (APPLICATION_GROUP, AD_SECURITY, AD_DISTRIBUTION)
-            user_group_scope: Rozsah skupiny (GLOBAL, LOCAL, UNIVERSAL) - typicky pro AD skupiny
-            description: Popis skupiny
-            info: Doplňující info
-            email: Email skupiny
+            name: Name of the new group
+            user_group_type: Group type (APPLICATION_GROUP, AD_SECURITY, AD_DISTRIBUTION)
+            user_group_scope: Group scope (GLOBAL, LOCAL, UNIVERSAL) - typically for AD groups
+            description: Group description
+            info: Additional info
+            email: Group email
             denied_in_permission: Denied in permission flag
+            domain_code: Domain code
         """
         session = self.ensure_session()
 
@@ -433,8 +495,12 @@ class IdmApiClient:
                     <ExCreateUserGroupRequest>
                         <guidSystem>{self.guid_system}</guidSystem>
                         <guidSession>{session}</guidSession>
-                        <name>{name}</name>
-                        <userGroupType>{user_group_type}</userGroupType>"""
+                        <name>{name}</name>"""
+
+        if domain_code:
+            body += f"<domainCode>{domain_code}</domainCode>"
+
+        body += f"<userGroupType>{user_group_type}</userGroupType>"
 
         if user_group_scope:
             body += f"<userGroupScope>{user_group_scope}</userGroupScope>"
@@ -471,14 +537,14 @@ class IdmApiClient:
         email: Optional[str] = None,
         status: Optional[str] = None,
     ) -> None:
-        """Změní název skupiny a další atributy
+        """Changes the group name and other attributes
 
-        Funkce nejprve získá detail skupiny, aby zachovala současné hodnoty,
-        pak provede změnu pouze specifikovaných polí.
+        The function first fetches the group detail to preserve the current
+        values, then applies the change only to the specified fields.
         """
         session = self.ensure_session()
 
-        # Nejprve získej detail skupiny pro zachování současných hodnot
+        # First fetch the group detail to preserve current values
         current_group = self.get_detail_user_group(
             name_user_group=search_user_group_name,
             domain_code=search_domain_code,
@@ -487,11 +553,11 @@ class IdmApiClient:
 
         group_info = current_group['group']
 
-        # Použij současné hodnoty pokud nejsou specifikované nové
-        # Ošetři None hodnoty - pokud je pole None nebo prázdné, neposílej ho
+        # Use current values when new ones are not specified
+        # Handle None values - if a field is None or empty, don't send it
         description = description if description is not None else (group_info.get('description') or '')
         email = email if email is not None else (group_info.get('email') or '')
-        info = info if info is not None else ''  # info není v API response, použij prázdný string
+        info = info if info is not None else ''  # info is not in the API response, use an empty string
         status = status if status is not None else (group_info.get('status') or 'ACTIVE')
         user_group_type = user_group_type if user_group_type is not None else (group_info.get('groupType') or 'APPLICATION_GROUP')
         user_group_scope = user_group_scope if user_group_scope is not None else (group_info.get('groupScope') or '')
@@ -511,7 +577,7 @@ class IdmApiClient:
         if user_group_scope:
             body += f"<userGroupScope>{user_group_scope}</userGroupScope>"
 
-        # Pouze přidej pole pokud nejsou prázdné
+        # Only include fields that are not empty
         if description:
             body += f"<description>{description}</description>"
         if info:
@@ -534,13 +600,13 @@ class IdmApiClient:
         user_attribute_code: str,
         user_attribute_value: str,
     ) -> None:
-        """Uloží uživatelský atribut k entitě (např. skupině)
+        """Saves a user attribute on an entity (e.g. a group)
 
         Args:
-            entity_code: Kód entity (např. "T_USER_GROUP" pro skupiny)
-            id_object: ID objektu (např. ID skupiny)
-            user_attribute_code: Kód atributu (např. "AD_CUSTOM_ATTRIBUTE_2")
-            user_attribute_value: Hodnota atributu (např. "resource")
+            entity_code: Entity code (e.g. "T_USER_GROUP" for groups)
+            id_object: Object ID (e.g. group ID)
+            user_attribute_code: Attribute code (e.g. "AD_CUSTOM_ATTRIBUTE_2")
+            user_attribute_value: Attribute value (e.g. "resource")
         """
         session = self.ensure_session()
 
@@ -572,16 +638,16 @@ class IdmApiClient:
         parent_user_group_id: Optional[str] = None,
         parent_user_group_code: Optional[str] = None,
     ) -> None:
-        """Odebere parent skupinu z child skupiny
+        """Removes a parent group from a child group
 
         Args:
-            user_group_name: Název child skupiny
-            parent_user_group_name: Název parent skupiny k odebrání
-            domain_code: Kód domény (optional)
-            user_group_id: ID child skupiny (optional)
-            user_group_code: Kód child skupiny (optional)
-            parent_user_group_id: ID parent skupiny (optional)
-            parent_user_group_code: Kód parent skupiny (optional)
+            user_group_name: Child group name
+            parent_user_group_name: Name of the parent group to remove
+            domain_code: Domain code (optional)
+            user_group_id: Child group ID (optional)
+            user_group_code: Child group code (optional)
+            parent_user_group_id: Parent group ID (optional)
+            parent_user_group_code: Parent group code (optional)
         """
         session = self.ensure_session()
 
@@ -625,16 +691,16 @@ class IdmApiClient:
         parent_user_group_id: Optional[str] = None,
         parent_user_group_code: Optional[str] = None,
     ) -> None:
-        """Přidá parent skupinu k child skupině (parent record v IDM)
+        """Adds a parent group to a child group (parent record in IDM)
 
         Args:
-            user_group_name: Název child skupiny (skupina, které přidáváme parent)
-            parent_user_group_name: Název parent skupiny (skupina, která se stane parentem)
-            domain_code: Kód domény (optional)
-            user_group_id: ID child skupiny (optional, alternativa k user_group_name)
-            user_group_code: Kód child skupiny (optional)
-            parent_user_group_id: ID parent skupiny (optional, alternativa k parent_user_group_name)
-            parent_user_group_code: Kód parent skupiny (optional)
+            user_group_name: Child group name (the group to which we add a parent)
+            parent_user_group_name: Parent group name (the group that becomes the parent)
+            domain_code: Domain code (optional)
+            user_group_id: Child group ID (optional, alternative to user_group_name)
+            user_group_code: Child group code (optional)
+            parent_user_group_id: Parent group ID (optional, alternative to parent_user_group_name)
+            parent_user_group_code: Parent group code (optional)
         """
         session = self.ensure_session()
 
@@ -669,7 +735,7 @@ class IdmApiClient:
         self._make_request(body)
 
 
-# Vytvoř globální client
+# Create the global client
 idm_client = IdmApiClient()
 
 
@@ -685,30 +751,30 @@ def idm_search_groups(
     max_results: int = 100,
 ) -> Dict[str, Any]:
     """
-    Vyhledá skupiny v IDM podle různých kritérií
+    Searches groups in IDM by various criteria
 
-    ⚠️ DŮLEŽITÉ UPOZORNĚNÍ:
-    - Pokud hledáš KONKRÉTNÍ skupinu (znáš přesný název), použij idm_get_group_detail!
-    - idm_get_group_detail je 100x rychlejší než search
-    - Tento tool načítá VŠECHNY skupiny a pak filtruje - může být VELMI POMALÝ!
-    - VŽDY specifikuj name_contains pro rychlejší hledání!
+    ⚠️ IMPORTANT NOTE:
+    - If you're looking for a SPECIFIC group (you know the exact name), use idm_get_group_detail!
+    - idm_get_group_detail is 100x faster than search
+    - This tool loads ALL groups and then filters — it can be VERY SLOW!
+    - ALWAYS specify name_contains for faster searching!
 
     Args:
-        name_contains: Část názvu skupiny k vyhledání (SILNĚ DOPORUČENO!)
-        organization_code: Kód organizace (optional)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var, ostatní domény: ask user)
-        status: Status skupiny - ACTIVE nebo INACTIVE (optional)
-        max_results: Maximální počet vrácených výsledků (default: 100)
+        name_contains: Part of the group name to search for (STRONGLY RECOMMENDED!)
+        organization_code: Organization code (optional)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var, other domains: ask user)
+        status: Group status - ACTIVE or INACTIVE (optional)
+        max_results: Maximum number of returned results (default: 100)
 
     Returns:
-        Slovník se seznamem skupin a jejich počtem
+        A dict with the list of groups and their count
     """
-    # Načti skupiny z IDM
+    # Load groups from IDM
     result = idm_client.get_list_user_group(organization_code, domain_code, status)
 
     groups = result['groups']
 
-    # Pokud je zadán name_contains, filtruj lokálně
+    # If name_contains is specified, filter locally
     if name_contains:
         name_lower = name_contains.lower()
         groups = [
@@ -716,13 +782,13 @@ def idm_search_groups(
             if name_lower in (g['name'] or '').lower()
         ]
 
-    # Omezte výsledky
+    # Limit the results
     if len(groups) > max_results:
         groups = groups[:max_results]
         return {
             "count": len(groups),
             "groups": groups,
-            "warning": f"Zobrazeno pouze prvních {max_results} z celkového počtu. Upřesni hledání pomocí name_contains nebo použij idm_get_group_detail pro konkrétní skupinu."
+            "warning": f"Only the first {max_results} results out of the total are shown. Narrow the search using name_contains or use idm_get_group_detail for a specific group."
         }
 
     return {"count": len(groups), "groups": groups}
@@ -737,20 +803,20 @@ def idm_get_group_detail(
     user_status: str = None,
 ) -> Dict[str, Any]:
     """
-    Získá detail konkrétní skupiny včetně členů
+    Gets the detail of a specific group including members
 
-    🎯 NEJRYCHLEJŠÍ způsob jak získat info o skupině!
-    Použij tento tool místo idm_search_groups když znáš přesný název skupiny.
+    🎯 The FASTEST way to get info about a group!
+    Use this tool instead of idm_search_groups when you know the exact group name.
 
     Args:
-        name_user_group: Název skupiny (vyžadováno pokud není id_user_group)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var, doporučeno vždy specifikovat)
-        id_user_group: ID skupiny (alternativa k name_user_group)
-        include_members: Zahrnout seznam členů (default: True)
-        user_status: Filtr statusu uživatelů - ACTIVE nebo INACTIVE (optional)
+        name_user_group: Group name (required unless id_user_group is given)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var, recommended to always specify)
+        id_user_group: Group ID (alternative to name_user_group)
+        include_members: Include the list of members (default: True)
+        user_status: Filter users by status - ACTIVE or INACTIVE (optional)
 
     Returns:
-        Slovník s detailem skupiny a seznamem členů
+        A dict with the group detail and the list of members
     """
     return idm_client.get_detail_user_group(
         id_user_group=id_user_group,
@@ -769,19 +835,19 @@ def idm_search_users(
     user_type: str = None,
 ) -> Dict[str, Any]:
     """
-    Vyhledá uživatele v IDM
+    Searches users in IDM
 
-    ⚠️ VAROVÁNÍ: Může být pomalé při načítání všech uživatelů!
-    Doporučeno specifikovat status nebo organization_code.
+    ⚠️ WARNING: Can be slow when loading all users!
+    Recommended to specify status or organization_code.
 
     Args:
-        organization_code: Kód organizace (optional)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
-        status: Status uživatele - ACTIVE nebo INACTIVE (doporučeno!)
-        user_type: Typ uživatele (optional)
+        organization_code: Organization code (optional)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
+        status: User status - ACTIVE or INACTIVE (recommended!)
+        user_type: User type (optional)
 
     Returns:
-        Slovník se seznamem uživatelů
+        A dict with the list of users
     """
     return idm_client.get_list_user(organization_code, domain_code, status, user_type)
 
@@ -793,15 +859,15 @@ def idm_get_user_detail(
     email: str = None,
 ) -> Dict[str, Any]:
     """
-    Získá detail konkrétního uživatele
+    Gets the detail of a specific user
 
     Args:
-        login: Login uživatele (vyžadováno pokud není email)
-        domain: Doména uživatele (default: IDM_DEFAULT_DOMAIN env var, doporučeno vždy specifikovat)
-        email: Email uživatele (alternativa k login)
+        login: User login (required unless email is given)
+        domain: User domain (default: IDM_DEFAULT_DOMAIN env var, recommended to always specify)
+        email: User email (alternative to login)
 
     Returns:
-        Slovník s detailem uživatele
+        A dict with the user detail
     """
     return idm_client.get_detail_user(login=login, email=email, domain=domain)
 
@@ -810,42 +876,42 @@ def idm_get_user_detail(
 def idm_add_user_to_group(
     login: str,
     name_user_group: str,
-    domain: str = None,
+    domain: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Přidá uživatele do skupiny
+    Adds a user to a group
 
     Args:
-        login: Login uživatele (povinné)
-        name_user_group: Název skupiny (povinné)
-        domain: Doména uživatele (optional, doporučeno)
+        login: User login (required)
+        name_user_group: Group name (required)
+        domain: User domain (optional, recommended)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
     idm_client.add_user_to_group(login, name_user_group, domain)
-    return f"Uživatel {login} byl přidán do skupiny {name_user_group}"
+    return f"User {login} was added to group {name_user_group}"
 
 
 @mcp.tool()
 def idm_remove_user_from_group(
     login: str,
     name_user_group: str,
-    domain: str = None,
+    domain: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Odebere uživatele ze skupiny
+    Removes a user from a group
 
     Args:
-        login: Login uživatele (povinné)
-        name_user_group: Název skupiny (povinné)
-        domain: Doména uživatele (optional, doporučeno)
+        login: User login (required)
+        name_user_group: Group name (required)
+        domain: User domain (optional, recommended)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
     idm_client.remove_user_from_group(login, name_user_group, domain)
-    return f"Uživatel {login} byl odebrán ze skupiny {name_user_group}"
+    return f"User {login} was removed from group {name_user_group}"
 
 
 @mcp.tool()
@@ -861,32 +927,32 @@ def idm_rename_group(
     status: str = None,
 ) -> str:
     """
-    Přejmenuje skupinu v IDM
+    Renames a group in IDM
 
-    ⚠️ DŮLEŽITÉ: Tato operace změní název skupiny!
-    Pokud nejsou specifikované description, info, email, status nebo user_group_type, zachovají se současné hodnoty.
+    ⚠️ IMPORTANT: This operation changes the group name!
+    If description, info, email, status or user_group_type are not specified, the current values are preserved.
 
     Args:
-        current_name: Současný název skupiny (povinné)
-        new_name: Nový název skupiny (povinné)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
-        user_group_type: Typ skupiny (optional, zachová se současný pokud není specifikováno)
-            Možné hodnoty:
-            - "APPLICATION_GROUP" - Aplikační skupina (No AD)
-            - "AD_SECURITY" - AD Security skupina
-            - "AD_DISTRIBUTION" - AD Distribution skupina
-        user_group_scope: Rozsah skupiny (optional, zachová se současný pokud není specifikováno)
-            Možné hodnoty:
-            - "GLOBAL" - Globální
-            - "LOCAL" - Lokální (Domain Local)
-            - "UNIVERSAL" - Univerzální
-        description: Nový popis (optional, zachová se současný pokud není specifikováno)
-        info: Nové info (optional, zachová se současné pokud není specifikováno)
-        email: Nový email (optional, zachová se současný pokud není specifikováno)
-        status: Nový status (optional, zachová se současný pokud není specifikováno)
+        current_name: Current group name (required)
+        new_name: New group name (required)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
+        user_group_type: Group type (optional, current value preserved if not specified)
+            Possible values:
+            - "APPLICATION_GROUP" - Application group (No AD)
+            - "AD_SECURITY" - AD Security group
+            - "AD_DISTRIBUTION" - AD Distribution group
+        user_group_scope: Group scope (optional, current value preserved if not specified)
+            Possible values:
+            - "GLOBAL" - Global
+            - "LOCAL" - Domain Local
+            - "UNIVERSAL" - Universal
+        description: New description (optional, current value preserved if not specified)
+        info: New info (optional, current value preserved if not specified)
+        email: New email (optional, current value preserved if not specified)
+        status: New status (optional, current value preserved if not specified)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
     idm_client.change_user_group(
         search_user_group_name=current_name,
@@ -899,9 +965,9 @@ def idm_rename_group(
         email=email,
         status=status,
     )
-    result_msg = f"Skupina '{current_name}' byla přejmenována na '{new_name}'"
+    result_msg = f"Group '{current_name}' was renamed to '{new_name}'"
     if user_group_type:
-        result_msg += f", typ: {user_group_type}"
+        result_msg += f", type: {user_group_type}"
     if user_group_scope:
         result_msg += f", scope: {user_group_scope}"
     return result_msg
@@ -914,30 +980,30 @@ def idm_add_group_parent(
     domain_code: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Přidá parent skupinu k child skupině (vytvoří parent record v IDM)
+    Adds a parent group to a child group (creates a parent record in IDM)
 
-    Tato funkce umožňuje vytvořit hierarchickou vazbu mezi skupinami.
-    Child skupina "zdědí" členy z parent skupiny.
+    This function allows you to create a hierarchical relationship between groups.
+    The child group "inherits" members from the parent group.
 
-    Příklad použití:
-    - Child: "G_DP_DEVELOPMENT_Specialist" (kompetence)
-    - Parent: "d_special_heads" (resource skupina)
-    → Kompetence získá přístup k resource skupině
+    Example use case:
+    - Child: "G_DP_DEVELOPMENT_Specialist" (competence)
+    - Parent: "d_special_heads" (resource group)
+    → The competence gains access to the resource group
 
     Args:
-        child_group_name: Název child skupiny (skupina, které přidáváme parent)
-        parent_group_name: Název parent skupiny (resource skupina, která se přidává jako parent record)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
+        child_group_name: Child group name (the group to which we add a parent)
+        parent_group_name: Parent group name (resource group added as a parent record)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
     idm_client.add_user_group_parent(
         user_group_name=child_group_name,
         parent_user_group_name=parent_group_name,
         domain_code=domain_code,
     )
-    return f"Parent skupina '{parent_group_name}' byla přidána ke skupině '{child_group_name}' v doméně {domain_code}"
+    return f"Parent group '{parent_group_name}' was added to group '{child_group_name}' in domain {domain_code}"
 
 
 @mcp.tool()
@@ -947,22 +1013,22 @@ def idm_remove_group_parent(
     domain_code: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Odebere parent skupinu z child skupiny v IDM
+    Removes a parent group from a child group in IDM
 
     Args:
-        child_group_name: Název child skupiny (skupina, ze které odebíráme parent)
-        parent_group_name: Název parent skupiny k odebrání
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
+        child_group_name: Child group name (the group from which we remove a parent)
+        parent_group_name: Name of the parent group to remove
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
     idm_client.remove_user_group_parent(
         user_group_name=child_group_name,
         parent_user_group_name=parent_group_name,
         domain_code=domain_code,
     )
-    return f"Parent skupina '{parent_group_name}' byla odebrána ze skupiny '{child_group_name}' v doméně {domain_code}"
+    return f"Parent group '{parent_group_name}' was removed from group '{child_group_name}' in domain {domain_code}"
 
 
 @mcp.tool()
@@ -973,25 +1039,25 @@ def idm_set_group_attribute(
     domain_code: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Nastaví uživatelský atribut pro skupinu v IDM
+    Sets a user attribute on a group in IDM
 
-    Tato funkce umožňuje nastavit custom atributy jako customAttribute2.
+    This function allows you to set custom attributes such as customAttribute2.
 
     Args:
-        group_name: Název skupiny (povinné)
-        attribute_code: Kód atributu (povinné)
-            Běžné hodnoty:
-            - "AD_CUSTOM_ATTRIBUTE_2" - customAttribute2 (např. "resource", "competence")
-        attribute_value: Hodnota atributu (povinné)
-            Pro AD_CUSTOM_ATTRIBUTE_2:
-            - "resource" - resource skupina
-            - "competence" - kompetenční skupina
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
+        group_name: Group name (required)
+        attribute_code: Attribute code (required)
+            Common values:
+            - "AD_CUSTOM_ATTRIBUTE_2" - customAttribute2 (e.g. "resource", "competence")
+        attribute_value: Attribute value (required)
+            For AD_CUSTOM_ATTRIBUTE_2:
+            - "resource" - resource group
+            - "competence" - competence group
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
 
     Returns:
-        Potvrzovací zpráva
+        Confirmation message
     """
-    # Nejprve získej ID skupiny
+    # First fetch the group ID
     group_detail = idm_client.get_detail_user_group(
         name_user_group=group_name,
         domain_code=domain_code,
@@ -1000,9 +1066,9 @@ def idm_set_group_attribute(
 
     group_id = group_detail['group'].get('id')
     if not group_id:
-        raise Exception(f"Skupina '{group_name}' nebyla nalezena nebo nemá ID")
+        raise Exception(f"Group '{group_name}' was not found or has no ID")
 
-    # Nastav atribut
+    # Set the attribute
     idm_client.save_user_attribute_to_entity(
         entity_code="T_USER_GROUP",
         id_object=group_id,
@@ -1010,15 +1076,15 @@ def idm_set_group_attribute(
         user_attribute_value=attribute_value,
     )
 
-    return f"Atribut '{attribute_code}' = '{attribute_value}' byl nastaven pro skupinu '{group_name}'"
+    return f"Attribute '{attribute_code}' = '{attribute_value}' was set for group '{group_name}'"
 
 
 @mcp.tool()
 def idm_create_group(
     name: str,
-    group_type: str = "APPLICATION_GROUP",
-    group_scope: str = None,
-    custom_attribute_2: str = None,
+    group_type: str,
+    group_scope: str,
+    custom_attribute_2: str,
     description: str = None,
     info: str = None,
     email: str = None,
@@ -1026,39 +1092,49 @@ def idm_create_group(
     domain_code: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Vytvoří novou skupinu v IDM
+    Creates a new group in IDM
 
-    ⚠️ DŮLEŽITÉ: Tato operace vytvoří novou skupinu v IDM!
-    Pro AD skupiny (AD_SECURITY, AD_DISTRIBUTION) je doporučeno specifikovat group_scope.
+    ⚠️ IMPORTANT: This operation creates a new group in IDM!
 
-    Pokud je zadán custom_attribute_2, nastaví se customAttribute2 hned po vytvoření
-    skupiny (provede se interně jako druhé volání saveUserAttributeToEntity).
+    REQUIRED parameters: group_type, group_scope, custom_attribute_2
+    The group is not created if any of these parameters is missing.
+    After creation, the attribute defined by the IDM_CUSTOM_ATTRIBUTE_2_CODE
+    environment variable is automatically set.
 
     Args:
-        name: Název nové skupiny (povinné)
-        group_type: Typ skupiny (default: "APPLICATION_GROUP")
-            Možné hodnoty:
-            - "NO_AD" nebo "APPLICATION_GROUP" - Aplikační skupina bez AD
-            - "AD_SECURITY" - AD Security skupina
-            - "AD_DISTRIBUTION" - AD Distribution skupina
-        group_scope: Rozsah skupiny (optional, doporučeno pro AD skupiny)
-            Možné hodnoty:
-            - "GLOBAL" - Globální
-            - "LOCAL" nebo "DOMAIN_LOCAL" - Lokální (Domain Local)
-            - "UNIVERSAL" - Univerzální
-        custom_attribute_2: Hodnota pro customAttribute2 (optional)
-            Běžné hodnoty: "resource", "competence"
-        description: Popis skupiny (optional)
-        info: Doplňující info (optional)
-        email: Email skupiny (optional)
+        name: Name of the new group (required)
+        group_type: Group type (required)
+            Possible values:
+            - "NO_AD" or "APPLICATION_GROUP" - Application group without AD
+            - "AD_SECURITY" - AD Security group
+            - "AD_DISTRIBUTION" - AD Distribution group
+        group_scope: Group scope (required)
+            Possible values:
+            - "GLOBAL" - Global
+            - "LOCAL" or "DOMAIN_LOCAL" - Domain Local
+            - "UNIVERSAL" - Universal
+        custom_attribute_2: Value for the IDM_CUSTOM_ATTRIBUTE_2_CODE attribute (required)
+            Common values: "resource", "competence", "application"
+        description: Group description (optional)
+        info: Additional info (optional)
+        email: Group email (optional)
         denied_in_permission: Denied in permission flag (optional)
-        domain_code: Kód domény pro dohledání ID nové skupiny při nastavování
-            custom_attribute_2 (default: IDM_DEFAULT_DOMAIN env var)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
 
     Returns:
-        Potvrzovací zpráva s ID nově vytvořené skupiny a případně nastaveným atributem
+        Confirmation message with the ID of the newly created group and the attribute that was set
     """
-    # Mapování user-friendly názvů na API hodnoty (stejné jako v idm_change_group)
+    missing = []
+    if not group_type:
+        missing.append("group_type")
+    if not group_scope:
+        missing.append("group_scope")
+    if not custom_attribute_2:
+        missing.append(f"custom_attribute_2 ({IDM_CUSTOM_ATTRIBUTE_2_CODE})")
+    if missing:
+        raise ValueError(f"Group was not created. Missing required parameters: {', '.join(missing)}")
+
+    # Map user-friendly names to API values (same as in idm_change_group)
     type_mapping = {
         "NO_AD": "APPLICATION_GROUP",
         "AD_SECURITY": "AD_SECURITY",
@@ -1077,9 +1153,7 @@ def idm_create_group(
     }
 
     api_group_type = type_mapping.get(group_type.upper(), group_type)
-    api_group_scope = None
-    if group_scope:
-        api_group_scope = scope_mapping.get(group_scope.upper(), group_scope)
+    api_group_scope = scope_mapping.get(group_scope.upper(), group_scope)
 
     result = idm_client.create_user_group(
         name=name,
@@ -1089,16 +1163,14 @@ def idm_create_group(
         info=info,
         email=email,
         denied_in_permission=denied_in_permission,
+        domain_code=domain_code or None,
     )
 
-    msg = f"Skupina '{name}' byla vytvořena (typ: {api_group_type}"
-    if api_group_scope:
-        msg += f", scope: {api_group_scope}"
-    msg += ")"
+    msg = f"Group '{name}' was created (type: {api_group_type}, scope: {api_group_scope})"
 
-    # Pokud createUserGroup nevrátil ID, dohledej ho podle názvu
+    # If createUserGroup did not return an ID, look it up by name
     group_id = result.get("id")
-    if not group_id and custom_attribute_2:
+    if not group_id:
         try:
             group_detail = idm_client.get_detail_user_group(
                 name_user_group=name,
@@ -1112,18 +1184,17 @@ def idm_create_group(
     if group_id:
         msg += f", ID: {group_id}"
 
-    # Nastav customAttribute2, pokud byl zadán
-    if custom_attribute_2:
-        if group_id:
-            idm_client.save_user_attribute_to_entity(
-                entity_code="T_USER_GROUP",
-                id_object=group_id,
-                user_attribute_code=IDM_CUSTOM_ATTRIBUTE_2_CODE,
-                user_attribute_value=custom_attribute_2,
-            )
-            msg += f", customAttribute2: {custom_attribute_2}"
-        else:
-            msg += f" ⚠️ customAttribute2='{custom_attribute_2}' nebylo nastaveno - skupina nemá ID"
+    # Set custom_attribute_2
+    if group_id:
+        idm_client.save_user_attribute_to_entity(
+            entity_code="T_USER_GROUP",
+            id_object=group_id,
+            user_attribute_code=IDM_CUSTOM_ATTRIBUTE_2_CODE,
+            user_attribute_value=custom_attribute_2,
+        )
+        msg += f", {IDM_CUSTOM_ATTRIBUTE_2_CODE}: {custom_attribute_2}"
+    else:
+        raise Exception(f"Group '{name}' was created, but its ID could not be found — attribute {IDM_CUSTOM_ATTRIBUTE_2_CODE} was not set")
 
     return msg
 
@@ -1142,37 +1213,37 @@ def idm_change_group(
     domain_code: str = IDM_DEFAULT_DOMAIN,
 ) -> str:
     """
-    Změní vlastnosti skupiny v IDM (název, typ, scope, custom atributy)
+    Changes group properties in IDM (name, type, scope, custom attributes)
 
-    Toto je hlavní tool pro změnu skupin. Umožňuje změnit více vlastností najednou.
+    This is the main tool for updating groups. It allows changing multiple properties at once.
 
     Args:
-        group_name: Současný název skupiny (povinné)
-        new_name: Nový název skupiny (optional, pokud není zadáno, název se nezmění)
-        group_type: Typ skupiny (optional)
-            Možné hodnoty:
-            - "NO_AD" nebo "APPLICATION_GROUP" - Aplikační skupina bez AD
-            - "AD_SECURITY" - AD Security skupina
-            - "AD_DISTRIBUTION" - AD Distribution skupina
-        group_scope: Rozsah skupiny (optional)
-            Možné hodnoty:
-            - "GLOBAL" - Globální
-            - "LOCAL" - Lokální (Domain Local)
-            - "UNIVERSAL" - Univerzální
-        custom_attribute_2: Hodnota pro customAttribute2 (optional)
-            Běžné hodnoty: "resource", "competence"
-        description: Nový popis (optional)
-        info: Nové info (optional)
-        email: Nový email (optional)
-        status: Nový status - "ACTIVE" nebo "INACTIVE" (optional)
-        domain_code: Kód domény (default: IDM_DEFAULT_DOMAIN env var)
+        group_name: Current group name (required)
+        new_name: New group name (optional, name is unchanged if not given)
+        group_type: Group type (optional)
+            Possible values:
+            - "NO_AD" or "APPLICATION_GROUP" - Application group without AD
+            - "AD_SECURITY" - AD Security group
+            - "AD_DISTRIBUTION" - AD Distribution group
+        group_scope: Group scope (optional)
+            Possible values:
+            - "GLOBAL" - Global
+            - "LOCAL" - Domain Local
+            - "UNIVERSAL" - Universal
+        custom_attribute_2: Value for customAttribute2 (optional)
+            Common values: "resource", "competence"
+        description: New description (optional)
+        info: New info (optional)
+        email: New email (optional)
+        status: New status - "ACTIVE" or "INACTIVE" (optional)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
 
     Returns:
-        Potvrzovací zpráva se všemi provedenými změnami
+        Confirmation message with all changes applied
     """
     changes = []
 
-    # Mapování user-friendly názvů na API hodnoty
+    # Map user-friendly names to API values
     type_mapping = {
         "NO_AD": "APPLICATION_GROUP",
         "AD_SECURITY": "AD_SECURITY",
@@ -1190,27 +1261,27 @@ def idm_change_group(
         "UNIVERSAL": "UNIVERSAL",
     }
 
-    # Převeď user-friendly hodnoty na API hodnoty
+    # Convert user-friendly values to API values
     api_group_type = None
     if group_type:
         api_group_type = type_mapping.get(group_type.upper(), group_type)
-        changes.append(f"typ: {api_group_type}")
+        changes.append(f"type: {api_group_type}")
 
     api_group_scope = None
     if group_scope:
         api_group_scope = scope_mapping.get(group_scope.upper(), group_scope)
         changes.append(f"scope: {api_group_scope}")
 
-    # Pokud se mění název nebo jiné základní vlastnosti, zavolej changeUserGroup
+    # If the name or other basic properties change, call changeUserGroup
     effective_new_name = new_name if new_name else group_name
 
     if new_name:
-        changes.append(f"název: {group_name} → {new_name}")
+        changes.append(f"name: {group_name} → {new_name}")
 
     if description:
-        changes.append(f"popis: {description}")
+        changes.append(f"description: {description}")
 
-    # Vždy zavolej changeUserGroup (i když jen pro zachování konzistence)
+    # Always call changeUserGroup (even if only to preserve consistency)
     idm_client.change_user_group(
         search_user_group_name=group_name,
         new_name=effective_new_name,
@@ -1223,9 +1294,9 @@ def idm_change_group(
         status=status,
     )
 
-    # Pokud se mění custom_attribute_2, zavolej saveUserAttributeToEntity
+    # If custom_attribute_2 is changing, call saveUserAttributeToEntity
     if custom_attribute_2:
-        # Získej ID skupiny (použij nový název pokud byl změněn)
+        # Fetch the group ID (use the new name if it was changed)
         group_detail = idm_client.get_detail_user_group(
             name_user_group=effective_new_name,
             domain_code=domain_code,
@@ -1242,21 +1313,62 @@ def idm_change_group(
             )
             changes.append(f"customAttribute2: {custom_attribute_2}")
         else:
-            changes.append(f"⚠️ customAttribute2 nebylo nastaveno - skupina nemá ID")
+            changes.append(f"⚠️ customAttribute2 was not set - group has no ID")
 
     if not changes:
-        return f"Skupina '{group_name}' - žádné změny nebyly specifikovány"
+        return f"Group '{group_name}' - no changes were specified"
 
-    return f"Skupina '{group_name}' byla upravena: {', '.join(changes)}"
+    return f"Group '{group_name}' was updated: {', '.join(changes)}"
 
 
-# Spusť server
+@mcp.tool()
+def idm_get_child_groups(
+    name_user_group: str,
+    domain_code: str = IDM_DEFAULT_DOMAIN,
+) -> Dict[str, Any]:
+    """
+    Gets the child groups (subgroups) of a given group
+
+    Use this tool when you need to find out which groups are subordinate
+    to a given group (i.e. have this group as their parent).
+
+    Args:
+        name_user_group: Parent group name (required)
+        domain_code: Domain code (default: IDM_DEFAULT_DOMAIN env var)
+
+    Returns:
+        A dict with the parent group name, the list of child groups and their count
+    """
+    return idm_client.get_child_groups(
+        name_user_group=name_user_group,
+        domain_code=domain_code or None,
+    )
+
+
+@mcp.tool()
+def idm_login() -> str:
+    """
+    Logs in to IDM and refreshes the session
+
+    Use this when:
+    - The session expired and other tools report "Session does not exist or has expired"
+    - You want to verify that login works
+
+    Returns:
+        Confirmation of successful login with the session GUID
+    """
+    idm_client.session_guid = None
+    guid_session = idm_client.login_to_idm()
+    return f"Login successful. Session GUID: {guid_session}"
+
+
+# Start the server
 if __name__ == "__main__":
-    # Zkontroluj credentials
+    # Check credentials
     if not all([IDM_GUID_SYSTEM, IDM_LOGIN, IDM_PASSWORD]):
         sys.stderr.write("Error: IDM credentials not configured!\n")
         sys.stderr.write("Please set: IDM_GUID_SYSTEM, IDM_LOGIN, IDM_PASSWORD\n")
         exit(1)
 
-    # Spusť server (přihlášení se provede automaticky při prvním volání)
+    # Start the server (login happens automatically on the first call)
     mcp.run()
