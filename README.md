@@ -24,7 +24,8 @@ Based on public sources (the official [MCP Registry](https://registry.modelconte
 - Rename groups and change group attributes (type, scope, description, email, status…)
 - Set custom user attributes on groups (e.g. `customAttribute2` for resource / competence flagging)
 - Manage hierarchical group relationships (parent records)
-- Automatic session re-authentication when the IDM session expires
+- List child groups (groups that have a given group as their parent)
+- Automatic session re-authentication when the IDM session expires, plus a manual re-login tool
 
 ## Available Tools
 
@@ -47,7 +48,7 @@ Add a user to a group.
 Remove a user from a group.
 
 ### `idm_create_group`
-Create a new group. Supports `APPLICATION_GROUP` (no AD), `AD_SECURITY` and `AD_DISTRIBUTION` types. Optionally sets `customAttribute2` (`resource` / `competence`) immediately after creation.
+Create a new group. Supports `APPLICATION_GROUP` (no AD), `AD_SECURITY` and `AD_DISTRIBUTION` types. `group_type`, `group_scope` and `custom_attribute_2` are **required** — the group is not created if any of them is missing. Sets `customAttribute2` (`resource` / `competence`) immediately after creation.
 
 ### `idm_change_group`
 The main "update" tool — change multiple properties of an existing group in one call: name, type, scope, custom attribute, description, info, email, status.
@@ -64,6 +65,12 @@ Add a parent record to a child group. Typical use case: a competence group (chil
 ### `idm_remove_group_parent`
 Remove a parent relationship between two groups.
 
+### `idm_get_child_groups`
+List the child groups (groups that have the given group as a parent record).
+
+### `idm_login`
+Force a fresh login to IDM and refresh the session. Useful if a tool call fails with a session-expired error.
+
 ## Usage Examples
 
 Once configured, you can use natural-language commands with Claude:
@@ -76,6 +83,7 @@ Once configured, you can use natural-language commands with Claude:
 - "Add parent record d_special_heads to group G_DP_DEVELOPMENT_Specialist"
 - "Remove user jan.novak from group G_DP_DEVELOPMENT_Specialist"
 - "Show detail of user marek.kudlacek in the ACME domain"
+- "List all child groups of d_special_heads"
 
 ### End-to-end example: creating a group with attributes and a parent record
 
@@ -103,6 +111,8 @@ Under the hood Claude orchestrates **two MCP tool calls** in sequence:
      "custom_attribute_2": "organization team"
    }
    ```
+
+   `group_type`, `group_scope` and `custom_attribute_2` are required for this call — omitting any of them raises an error instead of creating an incomplete group.
 
 2. **`idm_add_group_parent`** — attaches `G_MARA` as a parent record (this step is not part of `createUserGroup` in the IDM SOAP API and must be done separately):
 
@@ -167,6 +177,31 @@ cd mcp-aricoma-idm
 pip install -r requirements.txt
 ```
 
+## Installation with Docker
+
+A `dockerfile` is included if you prefer running the server in a container instead of a local Python environment.
+
+1. Build the image:
+```bash
+git clone https://github.com/marekudlacek/mcp-aricoma-idm.git
+cd mcp-aricoma-idm
+docker build -t mcp-aricoma-idm .
+```
+
+2. Since MCP servers communicate over stdio, run the container with `-i` (interactive stdin) and pass the IDM credentials as environment variables:
+```bash
+docker run -i --rm \
+  -e IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
+  -e IDM_GUID_SYSTEM=your-guid-system \
+  -e IDM_LOGIN=your-service-login \
+  -e IDM_PASSWORD=your-service-password \
+  -e IDM_DEFAULT_DOMAIN=ACME \
+  -e IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
+  mcp-aricoma-idm
+```
+
+You normally won't run this by hand — instead point your MCP client (Claude Code / Claude Desktop) at `docker run` as the launch command, see the Docker examples in the setup sections below.
+
 ## Configuration
 
 Set the following environment variables:
@@ -230,6 +265,36 @@ Or with `uv` (recommended):
 }
 ```
 
+Or with Docker:
+
+```json
+{
+  "mcpServers": {
+    "idm": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "IDM_ENDPOINT",
+        "-e", "IDM_GUID_SYSTEM",
+        "-e", "IDM_LOGIN",
+        "-e", "IDM_PASSWORD",
+        "-e", "IDM_DEFAULT_DOMAIN",
+        "-e", "IDM_CUSTOM_ATTRIBUTE_2_CODE",
+        "mcp-aricoma-idm"
+      ],
+      "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
+        "IDM_GUID_SYSTEM": "your-guid-system",
+        "IDM_LOGIN": "your-service-login",
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
+      }
+    }
+  }
+}
+```
+
 ### Alternative: install via the `claude` CLI
 
 If you have the Claude Code CLI installed, you can register the server with a single command instead of editing JSON by hand.
@@ -258,6 +323,22 @@ claude mcp add --transport stdio idm \
   --env IDM_DEFAULT_DOMAIN=ACME \
   --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   -- python /path/to/idm_mcp.py
+```
+
+#### With Docker:
+
+```bash
+claude mcp add --transport stdio idm \
+  --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
+  --env IDM_GUID_SYSTEM=your-guid-system \
+  --env IDM_LOGIN=your-service-login \
+  --env IDM_PASSWORD=your-service-password \
+  --env IDM_DEFAULT_DOMAIN=ACME \
+  --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
+  -- docker run -i --rm \
+  -e IDM_ENDPOINT -e IDM_GUID_SYSTEM -e IDM_LOGIN -e IDM_PASSWORD \
+  -e IDM_DEFAULT_DOMAIN -e IDM_CUSTOM_ATTRIBUTE_2_CODE \
+  mcp-aricoma-idm
 ```
 
 #### Manage MCP servers:
@@ -325,6 +406,36 @@ Or with `uv` (recommended):
         "--with", "mcp",
         "python",
         "/path/to/idm_mcp.py"
+      ],
+      "env": {
+        "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
+        "IDM_GUID_SYSTEM": "your-guid-system",
+        "IDM_LOGIN": "your-service-login",
+        "IDM_PASSWORD": "your-service-password",
+        "IDM_DEFAULT_DOMAIN": "ACME",
+        "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
+      }
+    }
+  }
+}
+```
+
+Or with Docker:
+
+```json
+{
+  "mcpServers": {
+    "idm": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "IDM_ENDPOINT",
+        "-e", "IDM_GUID_SYSTEM",
+        "-e", "IDM_LOGIN",
+        "-e", "IDM_PASSWORD",
+        "-e", "IDM_DEFAULT_DOMAIN",
+        "-e", "IDM_CUSTOM_ATTRIBUTE_2_CODE",
+        "mcp-aricoma-idm"
       ],
       "env": {
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
