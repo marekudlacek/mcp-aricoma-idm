@@ -132,7 +132,7 @@ Result in AC Identita UI — group `G_MARA_TEST` is created as `AD Security / Gl
 - Python 3.10+
 - Claude (Code or Desktop), or any other MCP-compatible client
 - Access to an ARICOMA IDM instance with the `ExternalInterface` SOAP service enabled
-- IDM service credentials (`guidSystem`, login, password)
+- IDM service credentials (`guidSystem` and login); the secret is stored in the OS keychain
 
 ## Installing uv (Recommended)
 
@@ -188,13 +188,13 @@ cd mcp-aricoma-idm
 docker build -t mcp-aricoma-idm .
 ```
 
-2. Since MCP servers communicate over stdio, run the container with `-i` (interactive stdin) and pass the IDM credentials as environment variables:
+2. Since MCP servers communicate over stdio, run the container with `-i` (interactive stdin). The container must have access to a configured OS keychain backend; credentials are not passed as environment variables:
 ```bash
 docker run -i --rm \
   -e IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   -e IDM_GUID_SYSTEM=your-guid-system \
   -e IDM_LOGIN=your-service-login \
-  -e IDM_PASSWORD=your-service-password \
+  -e IDM_CREDENTIAL_SERVICE=idm-mcp \
   -e IDM_DEFAULT_DOMAIN=ACME \
   -e IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   mcp-aricoma-idm
@@ -211,9 +211,19 @@ Set the following environment variables:
 | `IDM_ENDPOINT` | Yes | Full URL of the IDM SOAP endpoint (e.g. `https://idm.your-company.com/IDM/ExternalInterface?wsdl`) |
 | `IDM_GUID_SYSTEM` | Yes | GUID of the calling system in IDM (assigned by IDM admin) |
 | `IDM_LOGIN` | Yes | Service account login for IDM |
-| `IDM_PASSWORD` | Yes | Service account password |
+| `IDM_CREDENTIAL_SERVICE` | No | OS keychain service name for the secret. Default: `idm-mcp`. |
 | `IDM_DEFAULT_DOMAIN` | No | Default IDM domain code used when a tool is invoked without `domain_code` (e.g. `ACME`). Leave empty to require explicit specification. |
 | `IDM_CUSTOM_ATTRIBUTE_2_CODE` | No | Attribute code used by the `custom_attribute_2` parameter in `idm_create_group` / `idm_change_group`. Tenant-specific. Default: `AD_CUSTOM_ATTRIBUTE_2`. |
+
+Store the service account secret once in the OS keychain. The prompt does not echo the secret:
+
+```bash
+python idm_mcp.py --store-credentials
+```
+
+The keychain entry is looked up by the pair `IDM_CREDENTIAL_SERVICE` + `IDM_LOGIN`. With `uv`, run the command as `uv run --with keyring --with requests --with mcp python idm_mcp.py --store-credentials`.
+
+> **Docker:** The container must be configured to use a persistent OS keychain backend. Do not pass IDM secrets through Docker environment variables or MCP client configuration.
 
 ## Setup for Claude Code
 
@@ -229,7 +239,6 @@ Add to your `~/.claude.json` or your project's `.claude.json`:
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -247,6 +256,7 @@ Or with `uv` (recommended):
       "command": "uv",
       "args": [
         "run",
+        "--with", "keyring",
         "--with", "requests",
         "--with", "mcp",
         "python",
@@ -256,7 +266,6 @@ Or with `uv` (recommended):
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -277,7 +286,6 @@ Or with Docker:
         "-e", "IDM_ENDPOINT",
         "-e", "IDM_GUID_SYSTEM",
         "-e", "IDM_LOGIN",
-        "-e", "IDM_PASSWORD",
         "-e", "IDM_DEFAULT_DOMAIN",
         "-e", "IDM_CUSTOM_ATTRIBUTE_2_CODE",
         "mcp-aricoma-idm"
@@ -286,7 +294,6 @@ Or with Docker:
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -306,10 +313,9 @@ claude mcp add --transport stdio idm \
   --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   --env IDM_GUID_SYSTEM=your-guid-system \
   --env IDM_LOGIN=your-service-login \
-  --env IDM_PASSWORD=your-service-password \
   --env IDM_DEFAULT_DOMAIN=ACME \
   --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
-  -- uv run --with requests --with mcp python /path/to/idm_mcp.py
+  -- uv run --with keyring --with requests --with mcp python /path/to/idm_mcp.py
 ```
 
 #### With python:
@@ -319,7 +325,6 @@ claude mcp add --transport stdio idm \
   --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   --env IDM_GUID_SYSTEM=your-guid-system \
   --env IDM_LOGIN=your-service-login \
-  --env IDM_PASSWORD=your-service-password \
   --env IDM_DEFAULT_DOMAIN=ACME \
   --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   -- python /path/to/idm_mcp.py
@@ -332,11 +337,10 @@ claude mcp add --transport stdio idm \
   --env IDM_ENDPOINT=https://idm.your-company.com/IDM/ExternalInterface?wsdl \
   --env IDM_GUID_SYSTEM=your-guid-system \
   --env IDM_LOGIN=your-service-login \
-  --env IDM_PASSWORD=your-service-password \
   --env IDM_DEFAULT_DOMAIN=ACME \
   --env IDM_CUSTOM_ATTRIBUTE_2_CODE=AD_CUSTOM_ATTRIBUTE_2 \
   -- docker run -i --rm \
-  -e IDM_ENDPOINT -e IDM_GUID_SYSTEM -e IDM_LOGIN -e IDM_PASSWORD \
+  -e IDM_ENDPOINT -e IDM_GUID_SYSTEM -e IDM_LOGIN \
   -e IDM_DEFAULT_DOMAIN -e IDM_CUSTOM_ATTRIBUTE_2_CODE \
   mcp-aricoma-idm
 ```
@@ -384,7 +388,6 @@ With `python`:
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -402,6 +405,7 @@ Or with `uv` (recommended):
       "command": "uv",
       "args": [
         "run",
+        "--with", "keyring",
         "--with", "requests",
         "--with", "mcp",
         "python",
@@ -411,7 +415,6 @@ Or with `uv` (recommended):
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -432,7 +435,6 @@ Or with Docker:
         "-e", "IDM_ENDPOINT",
         "-e", "IDM_GUID_SYSTEM",
         "-e", "IDM_LOGIN",
-        "-e", "IDM_PASSWORD",
         "-e", "IDM_DEFAULT_DOMAIN",
         "-e", "IDM_CUSTOM_ATTRIBUTE_2_CODE",
         "mcp-aricoma-idm"
@@ -441,7 +443,6 @@ Or with Docker:
         "IDM_ENDPOINT": "https://idm.your-company.com/IDM/ExternalInterface?wsdl",
         "IDM_GUID_SYSTEM": "your-guid-system",
         "IDM_LOGIN": "your-service-login",
-        "IDM_PASSWORD": "your-service-password",
         "IDM_DEFAULT_DOMAIN": "ACME",
         "IDM_CUSTOM_ATTRIBUTE_2_CODE": "AD_CUSTOM_ATTRIBUTE_2"
       }
@@ -462,7 +463,7 @@ Quit Claude Desktop completely and reopen it. The `idm_*` tools should now be av
 
 ## Security
 
-- Credentials live in the client's config file — protect it and **do not commit** it.
+- The client config contains only non-secret settings. IDM credentials are stored in the OS keychain and should never be added to environment variables or committed files.
 - The server only talks to the IDM endpoint over HTTPS. SSL verification is disabled in `idm_mcp.py` (`verify=False`) to support internal CAs — adjust if you have a trusted certificate chain.
 - Use a dedicated service account in IDM with the minimum required permissions.
 
