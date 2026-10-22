@@ -6,6 +6,9 @@ Enables searching groups and users in IDM directly from Claude Desktop / Code
 
 import os
 import sys
+import getpass
+import keyring
+import keyring.errors
 import requests
 import warnings
 import xml.etree.ElementTree as ET
@@ -22,7 +25,7 @@ mcp = FastMCP("IDM Server")
 IDM_ENDPOINT = os.getenv("IDM_ENDPOINT", "")
 IDM_GUID_SYSTEM = os.getenv("IDM_GUID_SYSTEM", "")
 IDM_LOGIN = os.getenv("IDM_LOGIN", "")
-IDM_PASSWORD = os.getenv("IDM_PASSWORD", "")
+IDM_CREDENTIAL_SERVICE = os.getenv("IDM_CREDENTIAL_SERVICE", "idm-mcp")
 
 # Default domain code for searches (e.g. "ACME", "MYCORP"). Leave empty if
 # you don't want to implicitly filter by domain.
@@ -33,6 +36,48 @@ IDM_DEFAULT_DOMAIN = os.getenv("IDM_DEFAULT_DOMAIN", "")
 IDM_CUSTOM_ATTRIBUTE_2_CODE = os.getenv("IDM_CUSTOM_ATTRIBUTE_2_CODE", "AD_CUSTOM_ATTRIBUTE_2")
 
 
+def resolve_idm_password(login: str, service: str) -> str:
+    """Load the IDM secret from the operating system keychain."""
+    if not login:
+        return ""
+
+    try:
+        return keyring.get_password(service, login) or ""
+    except keyring.errors.KeyringError as error:
+        raise RuntimeError(
+            f"Unable to read IDM credentials from the OS keychain service '{service}'."
+        ) from error
+
+
+def store_credentials_cli() -> None:
+    """Store the IDM secret in the operating system keychain without echoing it."""
+    login = input(f"IDM login [{IDM_LOGIN}]: ").strip() or IDM_LOGIN
+    if not login:
+        sys.stderr.write("IDM login is required (set IDM_LOGIN or enter it here).\n")
+        raise SystemExit(1)
+
+    if not sys.stdin.isatty():
+        sys.stderr.write("Credential storage must be run from an interactive terminal.\n")
+        raise SystemExit(1)
+
+    password = getpass.getpass("IDM password: ")
+    if not password:
+        sys.stderr.write("IDM password is required.\n")
+        raise SystemExit(1)
+
+    try:
+        keyring.set_password(IDM_CREDENTIAL_SERVICE, login, password)
+    except keyring.errors.KeyringError as error:
+        sys.stderr.write(f"Failed to store IDM credentials: {error}\n")
+        raise SystemExit(1) from error
+
+    print(
+        f"Stored IDM credentials in the OS keychain "
+        f"(service='{IDM_CREDENTIAL_SERVICE}', account='{login}')."
+    )
+    raise SystemExit(0)
+
+
 class IdmApiClient:
     """Client for the IDM SOAP API"""
 
@@ -40,7 +85,7 @@ class IdmApiClient:
         self.endpoint = IDM_ENDPOINT
         self.guid_system = IDM_GUID_SYSTEM
         self.login = IDM_LOGIN
-        self.password = IDM_PASSWORD
+        self.password = ""
         self.session_guid: Optional[str] = None
 
     def _make_request(self, body: str, retry_on_auth_error: bool = True) -> ET.Element:
@@ -104,7 +149,7 @@ class IdmApiClient:
 
     def login_to_idm(self) -> str:
         """Logs in to IDM"""
-        sys.stderr.write(f"DEBUG login_to_idm: guid_system='{self.guid_system}', login='{self.login}', password_len={len(self.password)}\n")
+        self.password = resolve_idm_password(self.login, IDM_CREDENTIAL_SERVICE)
         body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:cz:autocont:idm:interface:external">
             <soapenv:Header/>
             <soapenv:Body>
@@ -1364,10 +1409,18 @@ def idm_login() -> str:
 
 # Start the server
 if __name__ == "__main__":
+    if "--store-credentials" in sys.argv:
+        store_credentials_cli()
+
     # Check credentials
-    if not all([IDM_GUID_SYSTEM, IDM_LOGIN, IDM_PASSWORD]):
+    idm_client.password = resolve_idm_password(IDM_LOGIN, IDM_CREDENTIAL_SERVICE)
+    if not all([IDM_GUID_SYSTEM, IDM_LOGIN, idm_client.password]):
         sys.stderr.write("Error: IDM credentials not configured!\n")
-        sys.stderr.write("Please set: IDM_GUID_SYSTEM, IDM_LOGIN, IDM_PASSWORD\n")
+        sys.stderr.write(
+            "Set IDM_GUID_SYSTEM and IDM_LOGIN, then run "
+            "'python idm_mcp.py --store-credentials' to save the secret "
+            "in the OS keychain.\n"
+        )
         exit(1)
 
     # Start the server (login happens automatically on the first call)
